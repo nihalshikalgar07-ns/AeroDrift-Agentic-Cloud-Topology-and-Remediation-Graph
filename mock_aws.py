@@ -1,0 +1,251 @@
+#asyncio used to write concurrent code using the  async and await syntax used for asynchronpus prgm 
+#boto3 ->allows py pgm to communicate with AWS
+#pull current AWS infra data
+#this code simulates collecting cloud infra info from AWS, without connecting to real AWS.
+#mock data --> defined manually not actual AWS data but only replicates it.
+
+import asyncio
+import boto3           #AWS SDK
+
+#desingned to clone AWS EC2 clients interface
+
+class MockEC2Client:
+#fetching EC2, subnet and security grps
+#EC2 -> Elastic compute cloude
+
+#ec2 -> creates AWS client for EC2 service
+    def describe_instances(self, **kwargs):
+        return {
+            "Reservations": [           #dict key
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-mock-app001",          #id of EC2
+                            "InstanceType": "t2.micro",             #instance type
+                            "State": {"Name": "running"},           #state
+                            "SubnetId": "subnet-mock-public",       #subnet containing instance
+                            "SecurityGroups": [
+                                {"GroupId": "sg-mock-app"}          #list of sg
+                            ]
+                        },
+                        {
+                            "InstanceId": "i-mock-db001",
+                            "InstanceType": "t2.micro",
+                            "State": {"Name": "running"},
+                            "SubnetId": "subnet-mock-private",
+                            "SecurityGroups": [
+                                {"GroupId": "sg-mock-db"}
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    
+#subnet -> a logically isolated virtual network in the AWS to launch and secure resources
+#asynchronous function for retrieve AWS subnet info
+    def describe_subnets(self, **kwargs):
+        return {
+            "Subnets": [
+                {
+                    "SubnetId": "subnet-mock-public",
+                    "VpcId": "vpc-mock001",
+                    "CidrBlock": "10.0.1.0/24",
+                    "AvailabilityZone": "us-east-1a",
+                    "State": "available"
+                },
+                {
+                    "SubnetId": "subnet-mock-private",
+                    "VpcId": "vpc-mock001",
+                    "CidrBlock": "10.0.2.0/24",
+                    "AvailabilityZone": "us-east-1b",
+                    "State": "available"
+                }
+            ]
+        }
+
+#security gropus ->a virtual firewall that controls incoming and outgoing trafiic for AWS resources such as EC2
+#asynchronous function for retriving security groups
+    def describe_security_groups(self, **kwargs):
+        return {
+            "SecurityGroups": [
+                {
+                    "GroupId": "sg-mock-app",
+                    "GroupName": "app-security",
+                    "VpcId": "vpc-mock001",
+                    "IpPermissions": [
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": 22,
+                            "ToPort": 22,
+                            "IpRanges": [
+                                {"CidrIp": "0.0.0.0/0"}
+                            ]
+                        }
+                    ],
+                    "IpPermissionsEgress": [
+                        {
+                            "IpProtocol": "-1",
+                            "IpRanges": [
+                                {"CidrIp": "0.0.0.0/0"}
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "GroupId": "sg-mock-db",
+                    "GroupName": "database-security",
+                    "VpcId": "vpc-mock001",
+                    "IpPermissions": [
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": 5432,
+                            "ToPort": 5432,
+                            "IpRanges": [
+                                {"CidrIp": "0.0.0.0/0"}
+                            ]
+                        }
+                    ],
+                    "IpPermissionsEgress": [
+                        {
+                            "IpProtocol": "-1",
+                            "IpRanges": [
+                                {"CidrIp": "0.0.0.0/0"}
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    
+    def revoke_security_group_ingress(self,GroupId, IpPermissions):
+        print("\n[MOCK AWS] Revoke Request received")
+        print("Security Group : ", GroupId)
+        print("Permissions : ", IpPermissions)
+
+        return{
+            "Return": True,
+            "GroupId":GroupId
+        }
+
+# Use local mock data instead of making real AWS API calls.
+#creating the mock client
+
+ec2 = MockEC2Client()
+
+#the asynchronous wrapper
+#executes when that cotoutine is awaited or scehduled as a task
+async def async_boto3_call(func, **kwargs):
+   
+    loop = asyncio.get_running_loop()
+
+    return await loop.run_in_executor(      #executer -> mechanism for running work outside the event loop thread.
+        None,
+        lambda: func(**kwargs)
+    )
+
+#why use wrapper --> synchronous call to worker thread so the event loop can continue schedulinng other tasks
+#get EC2 instances
+async def get_ec2_instances():
+    response = await async_boto3_call(
+        ec2.describe_instances
+    )
+
+    instances = []
+
+    for reservation in response.get("Reservations", []):
+        for instance in reservation.get("Instances", []):
+
+            instances.append({
+                "instance_id": instance.get("InstanceId"),
+                "instance_type": instance.get("InstanceType"),
+                "state": instance.get("State", {}).get("Name"),
+                "subnet_id": instance.get("SubnetId"),
+                "security_groups": [
+                    sg["GroupId"]
+                    for sg in instance.get("SecurityGroups", [])
+                ]
+            })
+
+    return instances
+
+#get subnets
+async def get_subnets():
+    response = await async_boto3_call(
+        ec2.describe_subnets
+    )
+
+    subnets = []
+
+    for subnet in response.get("Subnets", []):
+
+        subnets.append({
+            "subnet_id": subnet.get("SubnetId"),
+            "vpc_id": subnet.get("VpcId"),
+            "cidr_block": subnet.get("CidrBlock"),
+            "availability_zone": subnet.get("AvailabilityZone"),
+            "state": subnet.get("State")
+        })
+
+    return subnets
+
+#get security groups
+async def get_security_groups():
+    response = await async_boto3_call(
+        ec2.describe_security_groups
+    )
+
+    security_groups = []
+
+    for sg in response.get("SecurityGroups", []):
+
+        security_groups.append({
+            "group_id": sg.get("GroupId"),
+            "group_name": sg.get("GroupName"),
+            "vpc_id": sg.get("VpcId"),
+            "ingress_rules": sg.get("IpPermissions", []),
+            "egress_rules": sg.get("IpPermissionsEgress", [])
+        })
+
+    return security_groups
+
+#3 ingestion operations
+async def get_aws_state():
+
+    ec2_task = get_ec2_instances()
+    subnet_task = get_subnets()
+    sg_task = get_security_groups()
+
+    #scheduled the supplied routines and awaits their results
+    ec2s, subnets, security_groups = await asyncio.gather(
+        ec2_task,
+        subnet_task,
+        sg_task
+    )
+
+    return {
+        "ec2": ec2s,
+        "subnets": subnets,
+        "security_groups": security_groups
+    }
+
+#main function
+async def main():
+
+    state = await get_aws_state()
+
+    print("\n===== EC2 INSTANCES =====")
+    for instance in state["ec2"]:
+        print(instance)
+
+    print("\n===== SUBNETS =====")
+    for subnet in state["subnets"]:
+        print(subnet)
+
+    print("\n===== SECURITY GROUPS =====")
+    for sg in state["security_groups"]:
+        print(sg)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
